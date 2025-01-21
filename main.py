@@ -256,3 +256,4 @@ for name, model in models.items():
         print(f"Validation Score: {val_score}, Test Score: {test_score}")
     except Exception as e:
         print(f"Error with model {name}: {e}")
+
