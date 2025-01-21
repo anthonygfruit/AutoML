@@ -222,7 +222,7 @@ data = {
 target_str = 'multiclass'
 df = pd.DataFrame(data)[['feature1', 'feature2', 'feature3', target_str]]
 
-# guess data types
+# guess data types whatever
 dt = guess_data_types(df)
 df = update_data_types(df, dt)
 
