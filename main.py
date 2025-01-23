@@ -1,16 +1,15 @@
 #dependencies
-import pandas as pd
-import numpy as np
 from datetime import datetime
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler, MinMaxScaler
-from sklearn.model_selection import train_test_split
-#machine learning
-from sklearn.linear_model import LinearRegression, LogisticRegression
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier, GradientBoostingRegressor, GradientBoostingClassifier
-from sklearn.neural_network import MLPRegressor, MLPClassifier
-from statsmodels.tsa.arima.model import ARIMA
+import numpy as np
+import pandas as pd
 from prophet import Prophet
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier, GradientBoostingRegressor, GradientBoostingClassifier
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPRegressor, MLPClassifier
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler, MinMaxScaler
+from statsmodels.tsa.arima.model import ARIMA
 
 # guess data types
 def guess_data_types(df):
@@ -143,15 +142,16 @@ def impute_missing_values(df, strategy="mean"):
             df[col] = df[col].fillna(df[col].mode().iloc[0])
     return df
 
-# impute missing values of a categorical variable based on user input or most frequent value
+    # impute missing values of a categorical variable based on user input or most frequent value
 def impute_missing_values_categorical(df, col, value=None):
     # check if a value is provided
     if value:
         # fill missing values with the provided value
-        df[col] = df[col].fillna(value)
+        df[col] = df[col].replace([pd.NaT, None, "None", np.nan, "", float('inf'), -float('inf')], value).fillna(value)
     else:
         # fill missing values with the most frequent value
-        df[col] = df[col].fillna(df[col].mode().iloc[0])
+        mode_value = df[col].mode().iloc[0]
+        df[col] = df[col].replace([pd.NaT, None, "None", np.nan, "", float('inf'), -float('inf')], mode_value).fillna(mode_value)
     return df
 
 # select appropriate machine learning problem (regression, binary classification, multi-class classification, time-series)
@@ -211,28 +211,68 @@ def get_models(problem):
 
 # import training data
 data = {
-    "feature1": np.linspace(0, 10, 10000) + np.random.uniform(-8, 7, 10000),
-    "feature2": np.linspace(0, 5, 10000) + np.random.uniform(-8, 8, 10000),
-    "feature3": np.linspace(0, 1, 10000) + np.random.uniform(-1, 1, 10000),
-    "target": 3 * (np.linspace(0, 10, 10000) + np.random.uniform(-3, 3, 10000))**2 + 2 * (np.linspace(0, 10, 10000) + np.random.uniform(-1, 1, 10000)) + 1 + np.random.normal(0, 1, 10000) + np.random.uniform(-5, 5, 10000),  # Polynomial relationship with noise and added randomness
-    "binary": np.random.choice(['N', 'Y'], size=10000),  # Random binary classification target
-    "multiclass": np.random.choice(['A', 'AB', 'B', 'O'], size=10000)  # Random binary classification target
+    "feature1": np.where(np.random.rand(5000) < 0.05, np.nan,
+                         np.linspace(0, 10, 5000) + np.random.uniform(-8, 7, 5000)),
+    "feature2": np.where(np.random.rand(5000) < 0.05, np.nan,
+                         np.linspace(0, 5, 5000) + np.random.uniform(-8, 8, 5000)),
+    "feature3": np.where(np.random.rand(5000) < 0.05, np.nan,
+                         np.linspace(0, 1, 5000) + np.random.uniform(-1, 1, 5000)),
+    "feature4": np.where(np.random.rand(5000) < 0.05, np.nan, np.random.uniform(0, 100, 5000)),
+    "feature5": np.where(np.random.rand(5000) < 0.05, np.nan, np.random.normal(50, 10, 5000)),
+    "feature6": np.random.choice(['A', 'B', 'C'], size=5000, p=[0.4, 0.4, 0.2]),
+    "feature7": np.random.choice(['Yes', 'No'], size=5000, p=[0.6, 0.4]),
+    "feature8": np.random.randint(0, 100, size=5000),
+    "feature9": np.random.choice(['Low', 'Medium', 'High'], size=5000, p=[0.3, 0.5, 0.2]),
+    "feature10": np.random.uniform(-5, 5, 5000),
+    "target": np.where(np.random.rand(5000) < 0.05, None,
+                       np.exp(0.5 * np.linspace(0, 10, 5000)) +
+                       0.1 * np.random.choice([-1, 1], size=5000) *
+                       np.random.uniform(0, 1, 5000))
 }
 
-target_str = 'multiclass'
-df = pd.DataFrame(data)[['feature1', 'feature2', 'feature3', target_str]]
+target_str = 'target'
+
+df = pd.DataFrame(data)[['feature1', 'feature2', 'feature3', 'feature4', 'feature5', 'feature6', 'feature7', 'feature8', 'feature9', target_str]]
 
 # guess data types whatever
 dt = guess_data_types(df)
 df = update_data_types(df, dt)
 
+# impute the missing values
+#df = impute_missing_values_categorical(df, "binary", value="N")
+df = impute_missing_values(df, strategy="mean")
+
+# create frequency table for NaN and None values
+def freq_table(df):
+    return df.isna().sum().to_frame('NaN Values').join(df.apply(lambda x: (x == None).sum()).to_frame('None Values'))
+
+freq_table_result = freq_table(df)
+print(freq_table_result, '\n')
+
 # select the appropriate machine learning problem
 problem = select_problem(df, target_str)
 models = get_models(problem)
 
-# preprocess the data
-df = impute_missing_values(df, strategy="mean")
-df = impute_missing_values_categorical(df, "feature1", value="unknown")
+print(df.head(), '\n')
+
+# Plot target_str variable against all other variables in separate subplots in the same figure
+num_features = len(df.columns.difference([target_str]))
+ncols = int(np.ceil(np.sqrt(num_features)))  # Dynamic number of columns
+nrows = int(np.ceil(num_features / ncols))  # Dynamic number of rows
+fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 5 * nrows), sharey=True)
+axes = axes.flatten()  # Flatten axes for dynamic indexing
+colors = plt.cm.tab10.colors  # Use a colormap for different colors
+for ax, (feature, color) in zip(axes, zip(df.columns.difference([target_str]), colors)):
+    ax.scatter(df[feature], df[target_str], alpha=0.5, color=color)
+    ax.set_title(f'{feature} vs {target_str}')
+    ax.set_xlabel(feature)
+    ax.set_ylabel(target_str)
+for ax in axes[num_features:]:
+    ax.set_visible(False)  # Hide unused subplots
+plt.tight_layout()
+plt.show()
+
+# encode string variables
 cat_cols = [col for col, dtype in dt.items() if dtype == "string" or dtype == "date" or dtype == "object"]
 df, encoders = label_encode(df, cat_cols)
 
@@ -256,4 +296,3 @@ for name, model in models.items():
         print(f"Validation Score: {val_score}, Test Score: {test_score}")
     except Exception as e:
         print(f"Error with model {name}: {e}")
-
