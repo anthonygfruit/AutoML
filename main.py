@@ -1,11 +1,13 @@
 #dependencies
-from datetime import datetime
+import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from datetime import datetime
 from prophet import Prophet
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier, GradientBoostingRegressor, GradientBoostingClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.metrics import accuracy_score, f1_score, mean_squared_error, mean_absolute_error, r2_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
 from sklearn.neural_network import MLPRegressor, MLPClassifier
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler, MinMaxScaler
@@ -142,7 +144,7 @@ def impute_missing_values(df, strategy="mean"):
             df[col] = df[col].fillna(df[col].mode().iloc[0])
     return df
 
-    # impute missing values of a categorical variable based on user input or most frequent value
+# impute missing values of a categorical variable based on user input or most frequent value
 def impute_missing_values_categorical(df, col, value=None):
     # check if a value is provided
     if value:
@@ -152,6 +154,11 @@ def impute_missing_values_categorical(df, col, value=None):
         # fill missing values with the most frequent value
         mode_value = df[col].mode().iloc[0]
         df[col] = df[col].replace([pd.NaT, None, "None", np.nan, "", float('inf'), -float('inf')], mode_value).fillna(mode_value)
+
+# impute missing values for multiple columns based on a dictionary of col/value pairs
+def impute_missing_values_categorical_bulk(df, imputation_dict):
+    for col, value in imputation_dict.items():
+        df = impute_missing_values_categorical(df, col, value)
     return df
 
 # select appropriate machine learning problem (regression, binary classification, multi-class classification, time-series)
@@ -171,10 +178,7 @@ def select_problem(df, y_col, ts_col=None):
         return "regression"
 
 # split into train, validation, and test sets
-def split_data(df, y_col, test_size=0.2, validation_size=0.2):
-    # split the dataframe into features and target
-    X = df.drop(y_col, axis=1)
-    y = df[y_col]
+def split_data(X, y, test_size=0.2, validation_size=0.2):
     # split the data into train and test sets
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size)
     # split the train set into train and validation sets
@@ -209,6 +213,156 @@ def get_models(problem):
         models["Prophet"] = Prophet()
     return models
 
+# plot correlations
+def corplot(df, target_str):
+    # Plot target_str variable against all other variables in separate subplots in the same figure
+    num_features = len(df.columns.difference([target_str]))
+    ncols = int(np.ceil(np.sqrt(num_features)))  # Dynamic number of columns
+    nrows = int(np.ceil(num_features / ncols))  # Dynamic number of rows
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 5 * nrows), sharey=True)
+    axes = axes.flatten()  # Flatten axes for dynamic indexing
+    colors = plt.cm.tab10.colors  # Use a colormap for different colors
+    for ax, (feature, color) in zip(axes, zip(df.columns.difference([target_str]), colors)):
+        ax.scatter(df[feature], df[target_str], alpha=0.5, color=color)
+        ax.set_title(f'{feature} vs {target_str}')
+        ax.set_xlabel(feature)
+        ax.set_ylabel(target_str)
+    for ax in axes[num_features:]:
+        ax.set_visible(False)  # Hide unused subplots
+    plt.tight_layout()
+    plt.show()
+
+# create frequency table for NaN and None values
+def freq_table(df):
+    return df.isna().sum().to_frame('NaN Values').join(
+        df.apply(lambda x: (x == None).sum() + (x == "None").sum()).to_frame('None Values'))
+
+# identify categorical/date columns
+def get_cat_cols(df):
+    return [col for col in df.columns if df[col].dtype == "string" or df[col].dtype == "date" or df[col].dtype == "object"]
+
+# fit and run cross-validation
+def auto_fit(models, problem, X_train, y_train, X_val, y_val):
+    best_model_name = None
+    best_model = None
+    best_val_score = float("inf") if problem in ["regression", "time-series"] else float("-inf")
+    best_val_metrics = {}
+
+    for name, model in models.items():
+        try:
+            # fit the model on the training data
+            model.fit(X_train, y_train)
+            # make predictions
+            y_val_pred = model.predict(X_val)
+
+            # determine evaluation metrics based on problem type
+            if problem == "binary-classification":
+                val_metrics = {
+                    "accuracy": accuracy_score(y_val, y_val_pred),
+                    "f1": f1_score(y_val, y_val_pred),
+                    "precision": precision_score(y_val, y_val_pred),
+                    "recall": recall_score(y_val, y_val_pred)
+                }
+                score = val_metrics["accuracy"]  # Use accuracy as a comparison metric
+            elif problem == "multi-class-classification":
+                val_metrics = {
+                    "accuracy": accuracy_score(y_val, y_val_pred),
+                    "f1_macro": f1_score(y_val, y_val_pred, average='macro'),
+                    "f1_weighted": f1_score(y_val, y_val_pred, average='weighted')
+                }
+                score = val_metrics["accuracy"]  # Use accuracy as a comparison metric
+            elif problem in ["regression", "time-series"]:
+                val_metrics = {
+                    "mean_squared_error": mean_squared_error(y_val, y_val_pred),
+                    "mean_absolute_error": mean_absolute_error(y_val, y_val_pred),
+                    "r2_score": r2_score(y_val, y_val_pred)
+                }
+                score = val_metrics["mean_squared_error"]  # Use MSE as a comparison metric
+            else:
+                val_metrics = {}
+                score = None
+
+            # Determine the best model based on the validation metric
+            if (problem in ["binary-classification", "multi-class-classification"] and score > best_val_score) or \
+                (problem in ["regression", "time-series"] and score < best_val_score):
+                best_model_name = name
+                best_model = model
+                best_val_score = score
+                best_val_metrics = val_metrics
+
+            print(f"Validation Metrics for {name}: {val_metrics}")
+        except Exception as e:
+            print(f"Error fitting model {name}: {e}")
+
+    return (best_model_name, best_model)
+
+# test evaluation for the best model
+def test_fit(best_model_tuple, problem, X_test, y_test):
+    best_model = best_model_tuple[1]
+    best_model_name = best_model_tuple[0]
+
+    if best_model:
+        print(f"\nBest Model: {best_model_name}")
+        y_test_pred = best_model.predict(X_test)
+        if problem == "binary-classification":
+            test_metrics = {
+                "accuracy": accuracy_score(y_test, y_test_pred),
+                "f1": f1_score(y_test, y_test_pred),
+                "precision": precision_score(y_test, y_test_pred),
+                "recall": recall_score(y_test, y_test_pred)
+            }
+        elif problem == "multi-class-classification":
+            test_metrics = {
+                "accuracy": accuracy_score(y_test, y_test_pred),
+                "f1_macro": f1_score(y_test, y_test_pred, average='macro'),
+                "f1_weighted": f1_score(y_test, y_test_pred, average='weighted')
+            }
+        elif problem in ["regression", "time-series"]:
+            test_metrics = {
+                "mean_squared_error": mean_squared_error(y_test, y_test_pred),
+                "mean_absolute_error": mean_absolute_error(y_test, y_test_pred),
+                "r2_score": r2_score(y_test, y_test_pred)
+            }
+        else:
+            test_metrics = {}
+
+        print(f"Test Metrics for Best Model ({best_model_name}): {test_metrics}")
+
+        return test_metrics
+
+# run automl
+def main(df, target_str, imputation_dict):
+    # guess data types
+    dt = guess_data_types(df)
+    df = update_data_types(df, dt)
+    # impute missing values
+    if imputation_dict is not None:
+        df = impute_missing_values_categorical_bulk(df, imputation_dict)
+    df = impute_missing_values(df, strategy="mean")
+    # show frequency table for Nan/None values
+    print(freq_table(df))
+    # select appropriate machine learning problem
+    problem = select_problem(df, target_str)
+    # get machine learning models based on the problem type
+    models = get_models(problem)
+    # visualize correlations
+    corplot(df, target_str)
+    # find categorical variables
+    cat_cols = get_cat_cols(df)
+    # encode categorical variables
+    df, encoders = label_encode(df, cat_cols)
+    # scale the data
+    y = df[target_str]
+    X, scaler = scale_data(df.drop(target_str, axis=1))
+    # split the data into train, validation, and test sets
+    X_train, X_val, X_test, y_train, y_val, y_test = split_data(X, y, test_size=0.2, validation_size=0.4)
+    # fit the models
+    best_model_tuple = auto_fit(models, problem, X_train, y_train, X_val, y_val)
+    # test the best model
+    test_metrics = test_fit(best_model_tuple, problem, X_test, y_test)
+
+    return test_metrics, best_model_tuple
+
 # import training data
 data = {
     "feature1": np.where(np.random.rand(5000) < 0.05, np.nan,
@@ -220,79 +374,19 @@ data = {
     "feature4": np.where(np.random.rand(5000) < 0.05, np.nan, np.random.uniform(0, 100, 5000)),
     "feature5": np.where(np.random.rand(5000) < 0.05, np.nan, np.random.normal(50, 10, 5000)),
     "feature6": np.random.choice(['A', 'B', 'C'], size=5000, p=[0.4, 0.4, 0.2]),
-    "feature7": np.random.choice(['Yes', 'No'], size=5000, p=[0.6, 0.4]),
+    "target": np.random.choice(['Yes', 'No'], size=5000, p=[0.6, 0.4]),
     "feature8": np.random.randint(0, 100, size=5000),
-    "feature9": np.random.choice(['Low', 'Medium', 'High'], size=5000, p=[0.3, 0.5, 0.2]),
+    "feature7": np.random.choice(['Low', 'Medium', 'High'], size=5000, p=[0.3, 0.5, 0.2]),
     "feature10": np.random.uniform(-5, 5, 5000),
-    "target": np.where(np.random.rand(5000) < 0.05, None,
+    "feature9": np.where(np.random.rand(5000) < 0.05, None,
                        np.exp(0.5 * np.linspace(0, 10, 5000)) +
                        0.1 * np.random.choice([-1, 1], size=5000) *
                        np.random.uniform(0, 1, 5000))
 }
 
-target_str = 'target'
-
-df = pd.DataFrame(data)[['feature1', 'feature2', 'feature3', 'feature4', 'feature5', 'feature6', 'feature7', 'feature8', 'feature9', target_str]]
-
-# guess data types whatever
-dt = guess_data_types(df)
-df = update_data_types(df, dt)
-
-# impute the missing values
-#df = impute_missing_values_categorical(df, "binary", value="N")
-df = impute_missing_values(df, strategy="mean")
-
-# create frequency table for NaN and None values
-def freq_table(df):
-    return df.isna().sum().to_frame('NaN Values').join(df.apply(lambda x: (x == None).sum()).to_frame('None Values'))
-
-freq_table_result = freq_table(df)
-print(freq_table_result, '\n')
-
-# select the appropriate machine learning problem
-problem = select_problem(df, target_str)
-models = get_models(problem)
-
-print(df.head(), '\n')
-
-# Plot target_str variable against all other variables in separate subplots in the same figure
-num_features = len(df.columns.difference([target_str]))
-ncols = int(np.ceil(np.sqrt(num_features)))  # Dynamic number of columns
-nrows = int(np.ceil(num_features / ncols))  # Dynamic number of rows
-fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 5 * nrows), sharey=True)
-axes = axes.flatten()  # Flatten axes for dynamic indexing
-colors = plt.cm.tab10.colors  # Use a colormap for different colors
-for ax, (feature, color) in zip(axes, zip(df.columns.difference([target_str]), colors)):
-    ax.scatter(df[feature], df[target_str], alpha=0.5, color=color)
-    ax.set_title(f'{feature} vs {target_str}')
-    ax.set_xlabel(feature)
-    ax.set_ylabel(target_str)
-for ax in axes[num_features:]:
-    ax.set_visible(False)  # Hide unused subplots
-plt.tight_layout()
-plt.show()
-
-# encode string variables
-cat_cols = [col for col, dtype in dt.items() if dtype == "string" or dtype == "date" or dtype == "object"]
-df, encoders = label_encode(df, cat_cols)
-
-# split the data into train, validation, and test sets
-X_train, X_val, X_test, y_train, y_val, y_test = split_data(df, target_str)
-
-# fit the models and evaluate on validation and test sets
-results = {}
-print(problem.title(), '\n')
-for name, model in models.items():
-    print(name)
-    try:
-        # fit the model on the training data
-        model.fit(X_train, y_train)
-        # evaluate the model on the validation data
-        val_score = model.score(X_val, y_val)
-        # evaluate the model on the test data
-        test_score = model.score(X_test, y_test)
-        # store the results in the dictionary
-        results[name] = {"validation_score": val_score, "test_score": test_score}
-        print(f"Validation Score: {val_score}, Test Score: {test_score}")
-    except Exception as e:
-        print(f"Error with model {name}: {e}")
+#run main function
+if __name__ == "__main__":
+    warnings.filterwarnings("ignore")
+    target_str = 'target'
+    df = pd.DataFrame(data)[['feature1', 'feature2', 'feature3', 'feature4', 'feature5', 'feature6', 'feature7', target_str]]
+    test_metrics, best_model_tuple = main(df, target_str, imputation_dict=None)
