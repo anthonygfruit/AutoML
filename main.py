@@ -363,7 +363,7 @@ def main(df, target_str, imputation_dict):
 
     return test_metrics, best_model_tuple
 
-# import training data
+# import example training data
 data = {
     "feature1": np.where(np.random.rand(5000) < 0.05, np.nan,
                          np.linspace(0, 10, 5000) + np.random.uniform(-8, 7, 5000)),
