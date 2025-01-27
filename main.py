@@ -390,6 +390,7 @@ def main(df, target_str, descriptives=True, verbose=0, encode_method='label', cu
         print(get_descriptives(df).to_string(), '\n')
     # select appropriate machine learning problem
     problem = select_problem(df, target_str)
+    print(problem.title(), '\n')
     # get machine learning models based on the problem type
     models = get_models(problem)
     # visualize correlations
@@ -483,7 +484,7 @@ def predict_new(df, target_str, best_model_tuple, encoders, scaler, impute_metho
         print(f"Error during un-encoding: {e}")
     return df
 
-#SAMPLE USAGE
+"""#SAMPLE USAGE
 
 # import example training data
 data = {
@@ -496,11 +497,11 @@ data = {
     "feature4": np.where(np.random.rand(5000) < 0.05, np.nan, np.random.uniform(0, 100, 5000)),
     "feature5": np.where(np.random.rand(5000) < 0.05, np.nan, np.random.normal(50, 10, 5000)),
     "feature6": np.random.choice(['A', 'B', 'C'], size=5000, p=[0.4, 0.4, 0.2]),
-    "feature9": np.random.choice(['Yes', 'No'], size=5000, p=[0.6, 0.4]),
+    "feature7": np.random.choice(['Yes', 'No'], size=5000, p=[0.6, 0.4]),
     "feature8": np.random.randint(0, 100, size=5000),
-    "feature7": np.random.choice(['Low', 'Medium', 'High'], size=5000, p=[0.3, 0.5, 0.2]),
+    "target": np.random.choice(['Low', 'Medium', 'High'], size=5000, p=[0.3, 0.5, 0.2]),
     "feature10": np.random.uniform(-5, 5, 5000),
-    "target": np.where(np.random.rand(5000) < 0.05, None,
+    "feature9": np.where(np.random.rand(5000) < 0.05, None,
                        np.exp(0.5 * np.linspace(0, 10, 5000)) +
                        0.1 * np.random.choice([-1, 1], size=5000) *
                        np.random.uniform(0, 1, 5000))
@@ -517,10 +518,13 @@ new_data = {
     "feature4": np.where(np.random.rand(5000) < 0.05, np.nan, np.random.uniform(0, 100, 5000)),
     "feature5": np.where(np.random.rand(5000) < 0.05, np.nan, np.random.normal(50, 10, 5000)),
     "feature6": np.random.choice(['A', 'B', 'C'], size=5000, p=[0.4, 0.4, 0.2]),
-    "feature9": np.random.choice(['Yes', 'No'], size=5000, p=[0.6, 0.4]),
+    "feature7": np.random.choice(['Yes', 'No'], size=5000, p=[0.6, 0.4]),
     "feature8": np.random.randint(0, 100, size=5000),
-    "feature7": np.random.choice(['Low', 'Medium', 'High'], size=5000, p=[0.3, 0.5, 0.2]),
-    "feature10": np.random.uniform(-5, 5, 5000)
+    "feature10": np.random.uniform(-5, 5, 5000),
+    "feature9": np.where(np.random.rand(5000) < 0.05, None,
+                       np.exp(0.5 * np.linspace(0, 10, 5000)) +
+                       0.1 * np.random.choice([-1, 1], size=5000) *
+                       np.random.uniform(0, 1, 5000))
 }
 
 # run main function
@@ -533,9 +537,11 @@ if __name__ == "__main__":
     new_df = pd.DataFrame(new_data)[['feature1', 'feature2', 'feature3', 'feature4', 'feature5', 'feature6', 'feature7']]
 
     #automl
-    best_model_tuple, fitted_models, encoders, scaler = main(df, target_str, descriptives=True, verbose=2,
+    best_model_tuple, fitted_models, encoders, scaler = main(df, target_str, descriptives=True, verbose=1,
                                                          encode_method='label', custom_param_grids=None,
                                                          imputation_dict={'feature1' : 10, 'feature7': 'high'},
                                                          impute_method="mode", test_size=0.2, scale=True)
     #make predictions
-    new_df_pred = predict_new(new_df, target_str, best_model_tuple, encoders, scaler, impute_method='mode', imputation_dict={'feature1' : 10, 'feature7': 'high'})
+    new_df_pred = predict_new(new_df, target_str, best_model_tuple, encoders, scaler, 
+                    impute_method='mode', imputation_dict={'feature1' : 10, 'feature7': 'high'})
+"""
