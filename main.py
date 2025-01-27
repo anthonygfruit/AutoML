@@ -1,14 +1,17 @@
 #dependencies
 import warnings
+from datetime import datetime
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from datetime import datetime
 from prophet import Prophet
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier, GradientBoostingRegressor, GradientBoostingClassifier
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier, GradientBoostingRegressor, \
+    GradientBoostingClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression
-from sklearn.metrics import accuracy_score, f1_score, mean_squared_error, mean_absolute_error, r2_score, precision_score, recall_score
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, f1_score, mean_squared_error, mean_absolute_error, r2_score, \
+    precision_score, recall_score
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.neural_network import MLPRegressor, MLPClassifier
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler, MinMaxScaler
 from statsmodels.tsa.arima.model import ARIMA
@@ -154,6 +157,7 @@ def impute_missing_values_categorical(df, col, value=None):
         # fill missing values with the most frequent value
         mode_value = df[col].mode().iloc[0]
         df[col] = df[col].replace([pd.NaT, None, "None", np.nan, "", float('inf'), -float('inf')], mode_value).fillna(mode_value)
+    return df
 
 # impute missing values for multiple columns based on a dictionary of col/value pairs
 def impute_missing_values_categorical_bulk(df, imputation_dict):
@@ -232,28 +236,95 @@ def corplot(df, target_str):
     plt.tight_layout()
     plt.show()
 
-# create frequency table for NaN and None values
-def freq_table(df):
-    return df.isna().sum().to_frame('NaN Values').join(
-        df.apply(lambda x: (x == None).sum() + (x == "None").sum()).to_frame('None Values'))
+# get descriptive statistics including NaN and None values
+def get_descriptives(df):
+    descriptives = df.describe(include='all').transpose()
+    descriptives['NaN Count'] = df.isna().sum()
+    descriptives['None Count'] = df.apply(lambda x: (x == None).sum() + (x == "None").sum())
+    descriptives['Unique Count'] = df.nunique()
+    return descriptives
 
 # identify categorical/date columns
 def get_cat_cols(df):
     return [col for col in df.columns if df[col].dtype == "string" or df[col].dtype == "date" or df[col].dtype == "object"]
 
-# fit and run cross-validation
-def auto_fit(models, problem, X_train, y_train, X_val, y_val):
+# hyperparameter tuning
+def tune_params(models, problem, X_train, y_train, print_train_scores=False):
+
+    param_grids = {
+        "Linear Regression": {
+            "fit_intercept": [True, False],
+            "normalize": [True, False]
+        },
+        "Random Forest": {
+            "n_estimators": [10, 50, 100, 200],
+            "max_depth": [None, 10, 20, 30],
+            "min_samples_split": [2, 5, 10],
+            "min_samples_leaf": [1, 2, 4],
+            "max_features": ["sqrt", "log2", None],
+            "bootstrap": [True, False]
+        },
+        "Gradient Boosting": {
+            "n_estimators": [10, 50, 100, 200],
+            "learning_rate": [0.01, 0.05, 0.1, 0.2, 0.5],
+            "max_depth": [3, 5, 10],
+            "min_samples_split": [2, 5, 10],
+            "min_samples_leaf": [1, 2, 4]
+        },
+        "Neural Network": {
+            "hidden_layer_sizes": [(50,), (100,), (50, 50), (100, 50)],
+            "activation": ["relu", "tanh", "logistic"],
+            "solver": ["adam", "sgd", "lbfgs"],
+            "alpha": [0.0001, 0.001, 0.01],
+            "learning_rate": ["constant", "invscaling", "adaptive"]
+        },
+        "Logistic Regression": {
+            "penalty": ["l1", "l2", "elasticnet", "none"],
+            "C": [0.1, 1, 10, 100],
+            "solver": ["liblinear", "saga", "lbfgs"],
+            "max_iter": [100, 200, 500]
+        },
+        "ARIMA": {
+            "order": [(1, 0, 0), (0, 1, 1), (1, 1, 1), (2, 1, 2)],
+            "seasonal_order": [(0, 0, 0, 0), (1, 1, 1, 12)],
+            "trend": ["n", "c", "t", "ct"]
+        },
+        "Prophet": {}
+    }
+
+    tuned_models = {}
+
+    for name, model in models.items():
+        try:
+            param_grid = param_grids.get(name, {})
+            if param_grid:
+                grid_search = GridSearchCV(model, param_grid, cv=3, scoring="r2" if problem in ["regression", "time-series"] else "accuracy")
+                grid_search.fit(X_train, y_train)
+                tuned_models[name] = grid_search.best_estimator_
+                if print_train_scores:
+                    print(f"Best {grid_search.scoring} score for {name}: {grid_search.best_score_}")
+            else:
+                tuned_models[name] = model
+        except Exception as e:
+            print(f"Error tuning model {name}: {e}")
+            tuned_models[name] = model
+
+    return tuned_models
+
+# evaluate with run cross-validation
+def auto_cv(models, problem, X_val, y_val):
     best_model_name = None
     best_model = None
     best_val_score = float("inf") if problem in ["regression", "time-series"] else float("-inf")
     best_val_metrics = {}
+    all_models = {}
 
     for name, model in models.items():
         try:
-            # fit the model on the training data
-            model.fit(X_train, y_train)
             # make predictions
             y_val_pred = model.predict(X_val)
+            # add to all models
+            all_models[name] = model
 
             # determine evaluation metrics based on problem type
             if problem == "binary-classification":
@@ -294,7 +365,7 @@ def auto_fit(models, problem, X_train, y_train, X_val, y_val):
         except Exception as e:
             print(f"Error fitting model {name}: {e}")
 
-    return (best_model_name, best_model)
+    return (best_model_name, best_model), all_models
 
 # test evaluation for the best model
 def test_fit(best_model_tuple, problem, X_test, y_test):
@@ -331,16 +402,17 @@ def test_fit(best_model_tuple, problem, X_test, y_test):
         return test_metrics
 
 # run automl
-def main(df, target_str, imputation_dict):
+def main(df, target_str, descriptives=True, print_train_scores=False, imputation_dict=None, impute_method="mean", test_size=0.2, validation_size=0.4):
     # guess data types
     dt = guess_data_types(df)
     df = update_data_types(df, dt)
     # impute missing values
     if imputation_dict is not None:
         df = impute_missing_values_categorical_bulk(df, imputation_dict)
-    df = impute_missing_values(df, strategy="mean")
+    df = impute_missing_values(df, strategy=impute_method)
     # show frequency table for Nan/None values
-    print(freq_table(df))
+    if descriptives:
+        print(get_descriptives(df).to_string(), '\n')
     # select appropriate machine learning problem
     problem = select_problem(df, target_str)
     # get machine learning models based on the problem type
@@ -355,13 +427,15 @@ def main(df, target_str, imputation_dict):
     y = df[target_str]
     X, scaler = scale_data(df.drop(target_str, axis=1))
     # split the data into train, validation, and test sets
-    X_train, X_val, X_test, y_train, y_val, y_test = split_data(X, y, test_size=0.2, validation_size=0.4)
+    X_train, X_val, X_test, y_train, y_val, y_test = split_data(X, y, test_size=test_size, validation_size=validation_size)
     # fit the models
-    best_model_tuple = auto_fit(models, problem, X_train, y_train, X_val, y_val)
+    tuned_models = tune_params(models, problem, X_train, y_train, print_train_scores=print_train_scores)
+    # run cross-validation
+    best_model_tuple, fitted_models = auto_cv(tuned_models, problem, X_val, y_val)
     # test the best model
     test_metrics = test_fit(best_model_tuple, problem, X_test, y_test)
 
-    return test_metrics, best_model_tuple
+    return test_metrics, best_model_tuple, fitted_models
 
 # import example training data
 data = {
@@ -389,4 +463,6 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore")
     target_str = 'target'
     df = pd.DataFrame(data)[['feature1', 'feature2', 'feature3', 'feature4', 'feature5', 'feature6', 'feature7', target_str]]
-    test_metrics, best_model_tuple = main(df, target_str, imputation_dict=None)
+    test_metrics, best_model_tuple, fitted_models = main(df, target_str, descriptives=True, print_train_scores=False,
+                                                         imputation_dict={'feature1' : 10, 'feature7': 'high'},
+                                                         impute_method="mode", test_size=0.2, validation_size=0.4)
