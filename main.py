@@ -16,6 +16,7 @@ from sklearn.neural_network import MLPRegressor, MLPClassifier
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler, MinMaxScaler
 from statsmodels.tsa.arima.model import ARIMA
 
+
 # guess data types
 def guess_data_types(df):
     # create a dictionary to hold the data types
@@ -69,6 +70,10 @@ def update_data_types(df, data_types):
                 except:
                     df[col] = df[col].astype(bool)
     return df
+
+# identify categorical/date columns
+def get_cat_cols(df):
+    return [col for col in df.columns if df[col].dtype == "string" or df[col].dtype == "date" or df[col].dtype == "object"]
 
 # label encode categorical variables and keep the encoder for later
 def label_encode(df, cat_cols):
@@ -242,53 +247,53 @@ def get_descriptives(df):
     descriptives['Unique Count'] = df.nunique()
     return descriptives
 
-# identify categorical/date columns
-def get_cat_cols(df):
-    return [col for col in df.columns if df[col].dtype == "string" or df[col].dtype == "date" or df[col].dtype == "object"]
-
-# hyperparameter tuning and cross-validation
-def tune_params(models, problem, X_train, y_train, verbose=0):
-
+# hyperparameter tuning and cross-validation with custom parameter grids
+def tune_params(models, problem, X_train, y_train, verbose=0, custom_param_grids=None):
+    # Default parameter grids
     param_grids = {
         "Linear Regression": {
             "fit_intercept": [True, False],
-            "normalize": [True, False]
+            #"normalize": [True, False]
         },
         "Random Forest": {
-            "n_estimators": [10, 50, 100],
-            "max_depth": [None, 10, 20],
-            "min_samples_split": [2, 5, 10],
-            "min_samples_leaf": [1, 2, 4],
-            "max_features": ["sqrt", "log2", None],
-            "bootstrap": [True, False]
+                     "n_estimators": [10, 50, 100],
+        # "max_depth": [None, 5, 10],
+        # "min_samples_split": [2, 5, 10],
+        # "min_samples_leaf": [3, 5, 10],
+        # "max_features": ["sqrt", "log2", None],
+        # "bootstrap": [True, False]
         },
         "Gradient Boosting": {
             "n_estimators": [10, 50, 100, 200],
-            "learning_rate": [0.01, 0.1, 0.5],
-            "max_depth": [3, 5, 10],
-            "min_samples_split": [2, 5, 10],
-            "min_samples_leaf": [1, 2, 4]
+            # "learning_rate": [0.01, 0.1, 0.5],
+            # "max_depth": [3, 5, 10],
+            # "min_samples_split": [2, 5, 10],
+            # "min_samples_leaf": [3, 5, 10],
         },
         "Neural Network": {
             "hidden_layer_sizes": [(50,), (100,), (50, 50), (100, 50)],
-            "activation": ["relu", "tanh", "logistic"],
-            "solver": ["adam", "sgd", "lbfgs"],
-            "alpha": [0.0001, 0.001, 0.01],
-            "learning_rate": ["constant", "invscaling", "adaptive"]
+            # "activation": ["relu", "tanh", "logistic"],
+            # "solver": ["adam", "sgd", "lbfgs"],
+            # "alpha": [0.0001, 0.001, 0.01],
+            # "learning_rate": ["constant", "invscaling", "adaptive"]
         },
         "Logistic Regression": {
             "penalty": ["l1", "l2", "elasticnet", "none"],
-            "C": [0.1, 1, 10, 100],
-            "solver": ["liblinear", "saga", "lbfgs"],
-            "max_iter": [100, 200, 500]
+            #"C": [0.1, 1, 10, 100],
+            #"solver": ["liblinear", "saga", "lbfgs"],
+            #"max_iter": [100, 200, 500]
         },
         "ARIMA": {
             "order": [(1, 0, 0), (0, 1, 1), (1, 1, 1), (2, 1, 2)],
-            "seasonal_order": [(0, 0, 0, 0), (1, 1, 1, 12)],
-            "trend": ["n", "c", "t", "ct"]
+            #"seasonal_order": [(0, 0, 0, 0), (1, 1, 1, 12)],
+            #"trend": ["n", "c", "t", "ct"]
         },
         "Prophet": {}
     }
+
+    # Merge custom grids with default grids (if provided)
+    if custom_param_grids:
+        param_grids.update(custom_param_grids)
 
     tuned_models = {}
 
@@ -297,7 +302,13 @@ def tune_params(models, problem, X_train, y_train, verbose=0):
             print(f"Training {name} model...")
             param_grid = param_grids.get(name, {})
             if param_grid:
-                grid_search = GridSearchCV(model, param_grid, verbose=verbose, cv=4, scoring="r2" if problem in ["regression", "time-series"] else "accuracy")
+                grid_search = GridSearchCV(
+                    model,
+                    param_grid,
+                    verbose=verbose,
+                    cv=4,
+                    scoring="r2" if problem in ["regression", "time-series"] else "accuracy"
+                )
                 grid_search.fit(X_train, y_train)
                 tuned_models[name] = grid_search.best_estimator_
                 if verbose > 0:
@@ -366,7 +377,7 @@ def evaluate(tuned_models, problem, X_test, y_test):
     return (best_model_name, best_model)
 
 # run automl
-def main(df, target_str, descriptives=True, verbose=0, encode_method='label', imputation_dict=None, impute_method="mean", test_size=0.2):
+def main(df, target_str, descriptives=True, verbose=0, encode_method='label', custom_param_grids=None, imputation_dict=None, impute_method="mean", test_size=0.2, scale=True):
     # guess data types
     dt = guess_data_types(df)
     df = update_data_types(df, dt)
@@ -374,7 +385,7 @@ def main(df, target_str, descriptives=True, verbose=0, encode_method='label', im
     if imputation_dict is not None:
         df = impute_missing_values_categorical_bulk(df, imputation_dict)
     df = impute_missing_values(df, strategy=impute_method)
-    # show frequency table for Nan/None values
+    # show descriptives summary
     if verbose > 0:
         print(get_descriptives(df).to_string(), '\n')
     # select appropriate machine learning problem
@@ -392,17 +403,87 @@ def main(df, target_str, descriptives=True, verbose=0, encode_method='label', im
         cat_cols.remove(target_str)
         df, encoders = one_hot_encode(df, cat_cols)
         df, target_encoder = label_encode(df, [target_str])
+        encoders[target_str] = target_encoder[target_str]
     # scale the data
     y = df[target_str]
-    X, scaler = scale_data(df.drop(target_str, axis=1))
+    if scale:
+        X, scaler = scale_data(df.drop(target_str, axis=1))
+    else:
+        X = df.drop(target_str, axis=1)
     # split the data into train, validation, and test sets
     X_train, X_test, y_train, y_test = split_data(X, y, test_size=test_size)
     # fit the models with cv
-    tuned_models = tune_params(models, problem, X_train, y_train, verbose=verbose)
+    tuned_models = tune_params(models, problem, X_train, y_train, verbose=verbose, custom_param_grids=custom_param_grids)
     # test the best model
     best_model_tuple = evaluate(tuned_models, problem, X_test, y_test)
 
-    return test_metrics, best_model_tuple, fitted_models
+    return best_model_tuple, tuned_models, encoders, scaler
+
+# un-encode df
+def un_encode(df, encoders):
+    for col, encoder in encoders.items():
+        if isinstance(encoder, LabelEncoder):
+            try:
+                # Inverse transform using LabelEncoder
+                df[col] = encoder.inverse_transform(df[col])
+            except ValueError:
+                # Ignore unseen labels
+                df[col] = df[col].apply(lambda x: None if x not in encoder.classes_ else x)
+        elif isinstance(encoder, OneHotEncoder):
+            # Inverse transform using OneHotEncoder
+            ohe_columns = [c for c in df.columns if c.startswith(col + "_")]
+            ohe_array = df[ohe_columns].values
+            try:
+                # Find the original category
+                original_categories = encoder.inverse_transform(ohe_array)
+                df[col] = original_categories
+            except ValueError:
+                # Ignore unseen labels
+                df[col] = None
+            # Drop the one-hot encoded columns
+            df = df.drop(columns=ohe_columns, axis=1)
+    return df
+
+# make predictions on new data
+def predict_new(df, target_str, best_model_tuple, encoders, scaler, impute_method, imputation_dict=None):
+    # guess data types
+    dt = guess_data_types(df)
+    df = update_data_types(df, dt)
+    # impute missing values
+    if imputation_dict is not None:
+        df = impute_missing_values_categorical_bulk(df, imputation_dict)
+    df = impute_missing_values(df, strategy=impute_method)
+
+    # Encode the data using encoders
+    for col, encoder in encoders.items():
+        if col in df.columns and isinstance(encoder, LabelEncoder):
+            # Transform using LabelEncoder
+            df[col] = encoder.transform(df[col])
+        elif col in df.columns and isinstance(encoder, OneHotEncoder):
+            # Transform using OneHotEncoder
+            encoded_df = pd.DataFrame(
+                encoder.transform(df[[col]]).toarray(),
+                columns=[f"{col}_{cat}" for cat in encoder.categories_[0]],
+                index=df.index
+            )
+            df = pd.concat([df.drop(columns=[col]), encoded_df], axis=1)
+
+        # Scale the data using the provided scaler
+    X_new = scaler.transform(df)
+
+    # Make predictions using the best model
+    model = best_model_tuple[1]
+    predictions = model.predict(X_new)
+    df[target_str] = predictions
+    
+    # Attempt to un-encode the predictions DataFrame
+    try:
+        df = un_encode(df, encoders)
+    except Exception as e:
+        print(f"Error during un-encoding: {e}")
+    return df
+
+#SAMPLE USAGE
 
 # import example training data
 data = {
@@ -415,21 +496,46 @@ data = {
     "feature4": np.where(np.random.rand(5000) < 0.05, np.nan, np.random.uniform(0, 100, 5000)),
     "feature5": np.where(np.random.rand(5000) < 0.05, np.nan, np.random.normal(50, 10, 5000)),
     "feature6": np.random.choice(['A', 'B', 'C'], size=5000, p=[0.4, 0.4, 0.2]),
-    "target": np.random.choice(['Yes', 'No'], size=5000, p=[0.6, 0.4]),
+    "feature9": np.random.choice(['Yes', 'No'], size=5000, p=[0.6, 0.4]),
     "feature8": np.random.randint(0, 100, size=5000),
     "feature7": np.random.choice(['Low', 'Medium', 'High'], size=5000, p=[0.3, 0.5, 0.2]),
     "feature10": np.random.uniform(-5, 5, 5000),
-    "feature9": np.where(np.random.rand(5000) < 0.05, None,
+    "target": np.where(np.random.rand(5000) < 0.05, None,
                        np.exp(0.5 * np.linspace(0, 10, 5000)) +
                        0.1 * np.random.choice([-1, 1], size=5000) *
                        np.random.uniform(0, 1, 5000))
 }
 
-#run main function
+# import new data for predictions
+new_data = {
+    "feature1": np.where(np.random.rand(5000) < 0.05, np.nan,
+                         np.linspace(0, 10, 5000) + np.random.uniform(-8, 7, 5000)),
+    "feature2": np.where(np.random.rand(5000) < 0.05, np.nan,
+                         np.linspace(0, 5, 5000) + np.random.uniform(-8, 8, 5000)),
+    "feature3": np.where(np.random.rand(5000) < 0.05, np.nan,
+                         np.linspace(0, 1, 5000) + np.random.uniform(-1, 1, 5000)),
+    "feature4": np.where(np.random.rand(5000) < 0.05, np.nan, np.random.uniform(0, 100, 5000)),
+    "feature5": np.where(np.random.rand(5000) < 0.05, np.nan, np.random.normal(50, 10, 5000)),
+    "feature6": np.random.choice(['A', 'B', 'C'], size=5000, p=[0.4, 0.4, 0.2]),
+    "feature9": np.random.choice(['Yes', 'No'], size=5000, p=[0.6, 0.4]),
+    "feature8": np.random.randint(0, 100, size=5000),
+    "feature7": np.random.choice(['Low', 'Medium', 'High'], size=5000, p=[0.3, 0.5, 0.2]),
+    "feature10": np.random.uniform(-5, 5, 5000)
+}
+
+# run main function
 if __name__ == "__main__":
     warnings.filterwarnings("ignore")
+
+    #sample data
     target_str = 'target'
     df = pd.DataFrame(data)[['feature1', 'feature2', 'feature3', 'feature4', 'feature5', 'feature6', 'feature7', target_str]]
-    test_metrics, best_model_tuple, fitted_models = main(df, target_str, descriptives=True, verbose=2,
+    new_df = pd.DataFrame(new_data)[['feature1', 'feature2', 'feature3', 'feature4', 'feature5', 'feature6', 'feature7']]
+
+    #automl
+    best_model_tuple, fitted_models, encoders, scaler = main(df, target_str, descriptives=True, verbose=2,
+                                                         encode_method='label', custom_param_grids=None,
                                                          imputation_dict={'feature1' : 10, 'feature7': 'high'},
-                                                         impute_method="mode", test_size=0.2)
+                                                         impute_method="mode", test_size=0.2, scale=True)
+    #make predictions
+    new_df_pred = predict_new(new_df, target_str, best_model_tuple, encoders, scaler, impute_method='mode', imputation_dict={'feature1' : 10, 'feature7': 'high'})
