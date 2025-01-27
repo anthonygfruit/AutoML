@@ -182,12 +182,10 @@ def select_problem(df, y_col, ts_col=None):
         return "regression"
 
 # split into train, validation, and test sets
-def split_data(X, y, test_size=0.2, validation_size=0.2):
+def split_data(X, y, test_size=0.2):
     # split the data into train and test sets
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size)
-    # split the train set into train and validation sets
-    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=validation_size)
-    return X_train, X_val, X_test, y_train, y_val, y_test
+    return X_train, X_test, y_train, y_test
 
 # get machine learning models based on the problem type
 def get_models(problem):
@@ -248,8 +246,8 @@ def get_descriptives(df):
 def get_cat_cols(df):
     return [col for col in df.columns if df[col].dtype == "string" or df[col].dtype == "date" or df[col].dtype == "object"]
 
-# hyperparameter tuning
-def tune_params(models, problem, X_train, y_train, print_train_scores=False):
+# hyperparameter tuning and cross-validation
+def tune_params(models, problem, X_train, y_train, verbose=0):
 
     param_grids = {
         "Linear Regression": {
@@ -257,8 +255,8 @@ def tune_params(models, problem, X_train, y_train, print_train_scores=False):
             "normalize": [True, False]
         },
         "Random Forest": {
-            "n_estimators": [10, 50, 100, 200],
-            "max_depth": [None, 10, 20, 30],
+            "n_estimators": [10, 50, 100],
+            "max_depth": [None, 10, 20],
             "min_samples_split": [2, 5, 10],
             "min_samples_leaf": [1, 2, 4],
             "max_features": ["sqrt", "log2", None],
@@ -266,7 +264,7 @@ def tune_params(models, problem, X_train, y_train, print_train_scores=False):
         },
         "Gradient Boosting": {
             "n_estimators": [10, 50, 100, 200],
-            "learning_rate": [0.01, 0.05, 0.1, 0.2, 0.5],
+            "learning_rate": [0.01, 0.1, 0.5],
             "max_depth": [3, 5, 10],
             "min_samples_split": [2, 5, 10],
             "min_samples_leaf": [1, 2, 4]
@@ -296,12 +294,13 @@ def tune_params(models, problem, X_train, y_train, print_train_scores=False):
 
     for name, model in models.items():
         try:
+            print(f"Training {name} model...")
             param_grid = param_grids.get(name, {})
             if param_grid:
-                grid_search = GridSearchCV(model, param_grid, cv=3, scoring="r2" if problem in ["regression", "time-series"] else "accuracy")
+                grid_search = GridSearchCV(model, param_grid, verbose=verbose, cv=4, scoring="r2" if problem in ["regression", "time-series"] else "accuracy")
                 grid_search.fit(X_train, y_train)
                 tuned_models[name] = grid_search.best_estimator_
-                if print_train_scores:
+                if verbose > 0:
                     print(f"Best {grid_search.scoring} score for {name}: {grid_search.best_score_}")
             else:
                 tuned_models[name] = model
@@ -311,98 +310,63 @@ def tune_params(models, problem, X_train, y_train, print_train_scores=False):
 
     return tuned_models
 
-# evaluate with run cross-validation
-def auto_cv(models, problem, X_val, y_val):
+# evaluate with test best models
+def evaluate(tuned_models, problem, X_test, y_test):
     best_model_name = None
     best_model = None
-    best_val_score = float("inf") if problem in ["regression", "time-series"] else float("-inf")
-    best_val_metrics = {}
-    all_models = {}
+    best_test_score = float("inf") if problem in ["regression", "time-series"] else float("-inf")
+    best_test_metrics = {}
 
-    for name, model in models.items():
+    for name, model in tuned_models.items():
         try:
-            # make predictions
-            y_val_pred = model.predict(X_val)
-            # add to all models
-            all_models[name] = model
+            # Make predictions on the test set
+            y_test_pred = model.predict(X_test)
 
-            # determine evaluation metrics based on problem type
+            # Determine evaluation metrics based on problem type
             if problem == "binary-classification":
-                val_metrics = {
-                    "accuracy": accuracy_score(y_val, y_val_pred),
-                    "f1": f1_score(y_val, y_val_pred),
-                    "precision": precision_score(y_val, y_val_pred),
-                    "recall": recall_score(y_val, y_val_pred)
+                test_metrics = {
+                    "accuracy": accuracy_score(y_test, y_test_pred),
+                    "f1": f1_score(y_test, y_test_pred),
+                    "precision": precision_score(y_test, y_test_pred),
+                    "recall": recall_score(y_test, y_test_pred)
                 }
-                score = val_metrics["accuracy"]  # Use accuracy as a comparison metric
+                score = test_metrics["accuracy"]  # Use accuracy as a comparison metric
             elif problem == "multi-class-classification":
-                val_metrics = {
-                    "accuracy": accuracy_score(y_val, y_val_pred),
-                    "f1_macro": f1_score(y_val, y_val_pred, average='macro'),
-                    "f1_weighted": f1_score(y_val, y_val_pred, average='weighted')
+                test_metrics = {
+                    "accuracy": accuracy_score(y_test, y_test_pred),
+                    "f1_macro": f1_score(y_test, y_test_pred, average='macro'),
+                    "f1_weighted": f1_score(y_test, y_test_pred, average='weighted')
                 }
-                score = val_metrics["accuracy"]  # Use accuracy as a comparison metric
+                score = test_metrics["accuracy"]  # Use accuracy as a comparison metric
             elif problem in ["regression", "time-series"]:
-                val_metrics = {
-                    "mean_squared_error": mean_squared_error(y_val, y_val_pred),
-                    "mean_absolute_error": mean_absolute_error(y_val, y_val_pred),
-                    "r2_score": r2_score(y_val, y_val_pred)
+                test_metrics = {
+                    "mean_squared_error": mean_squared_error(y_test, y_test_pred),
+                    "mean_absolute_error": mean_absolute_error(y_test, y_test_pred),
+                    "r2_score": r2_score(y_test, y_test_pred)
                 }
-                score = val_metrics["mean_squared_error"]  # Use MSE as a comparison metric
+                score = test_metrics["mean_squared_error"]  # Use MSE as a comparison metric
             else:
-                val_metrics = {}
+                test_metrics = {}
                 score = None
 
-            # Determine the best model based on the validation metric
-            if (problem in ["binary-classification", "multi-class-classification"] and score > best_val_score) or \
-                (problem in ["regression", "time-series"] and score < best_val_score):
+            # Determine the best model based on the test metric
+            if (problem in ["binary-classification", "multi-class-classification"] and score > best_test_score) or \
+                    (problem in ["regression", "time-series"] and score < best_test_score):
                 best_model_name = name
                 best_model = model
-                best_val_score = score
-                best_val_metrics = val_metrics
-
-            print(f"Validation Metrics for {name}: {val_metrics}")
+                best_test_score = score
+                best_test_metrics = test_metrics
         except Exception as e:
-            print(f"Error fitting model {name}: {e}")
+            print(f"Error evaluating model {name}: {e}")
 
-    return (best_model_name, best_model), all_models
+    # Print only the best model's results
+    if best_model_name:
+        print(f"Best Model: {best_model_name}", f"\nScore: {best_test_metrics}")
 
-# test evaluation for the best model
-def test_fit(best_model_tuple, problem, X_test, y_test):
-    best_model = best_model_tuple[1]
-    best_model_name = best_model_tuple[0]
-
-    if best_model:
-        print(f"\nBest Model: {best_model_name}")
-        y_test_pred = best_model.predict(X_test)
-        if problem == "binary-classification":
-            test_metrics = {
-                "accuracy": accuracy_score(y_test, y_test_pred),
-                "f1": f1_score(y_test, y_test_pred),
-                "precision": precision_score(y_test, y_test_pred),
-                "recall": recall_score(y_test, y_test_pred)
-            }
-        elif problem == "multi-class-classification":
-            test_metrics = {
-                "accuracy": accuracy_score(y_test, y_test_pred),
-                "f1_macro": f1_score(y_test, y_test_pred, average='macro'),
-                "f1_weighted": f1_score(y_test, y_test_pred, average='weighted')
-            }
-        elif problem in ["regression", "time-series"]:
-            test_metrics = {
-                "mean_squared_error": mean_squared_error(y_test, y_test_pred),
-                "mean_absolute_error": mean_absolute_error(y_test, y_test_pred),
-                "r2_score": r2_score(y_test, y_test_pred)
-            }
-        else:
-            test_metrics = {}
-
-        print(f"Test Metrics for Best Model ({best_model_name}): {test_metrics}")
-
-        return test_metrics
+    return (best_model_name, best_model)
 
 # run automl
-def main(df, target_str, descriptives=True, print_train_scores=False, imputation_dict=None, impute_method="mean", test_size=0.2, validation_size=0.4):
+def main(df, target_str, descriptives=True, verbose=0, encode_method='label', imputation_dict=None, impute_method="mean", test_size=0.2):
     # guess data types
     dt = guess_data_types(df)
     df = update_data_types(df, dt)
@@ -411,7 +375,7 @@ def main(df, target_str, descriptives=True, print_train_scores=False, imputation
         df = impute_missing_values_categorical_bulk(df, imputation_dict)
     df = impute_missing_values(df, strategy=impute_method)
     # show frequency table for Nan/None values
-    if descriptives:
+    if verbose > 0:
         print(get_descriptives(df).to_string(), '\n')
     # select appropriate machine learning problem
     problem = select_problem(df, target_str)
@@ -422,18 +386,21 @@ def main(df, target_str, descriptives=True, print_train_scores=False, imputation
     # find categorical variables
     cat_cols = get_cat_cols(df)
     # encode categorical variables
-    df, encoders = label_encode(df, cat_cols)
+    if encode_method=='label':
+        df, encoders = label_encode(df, cat_cols)
+    elif encode_method=='onehot':
+        cat_cols.remove(target_str)
+        df, encoders = one_hot_encode(df, cat_cols)
+        df, target_encoder = label_encode(df, [target_str])
     # scale the data
     y = df[target_str]
     X, scaler = scale_data(df.drop(target_str, axis=1))
     # split the data into train, validation, and test sets
-    X_train, X_val, X_test, y_train, y_val, y_test = split_data(X, y, test_size=test_size, validation_size=validation_size)
-    # fit the models
-    tuned_models = tune_params(models, problem, X_train, y_train, print_train_scores=print_train_scores)
-    # run cross-validation
-    best_model_tuple, fitted_models = auto_cv(tuned_models, problem, X_val, y_val)
+    X_train, X_test, y_train, y_test = split_data(X, y, test_size=test_size)
+    # fit the models with cv
+    tuned_models = tune_params(models, problem, X_train, y_train, verbose=verbose)
     # test the best model
-    test_metrics = test_fit(best_model_tuple, problem, X_test, y_test)
+    best_model_tuple = evaluate(tuned_models, problem, X_test, y_test)
 
     return test_metrics, best_model_tuple, fitted_models
 
@@ -463,6 +430,6 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore")
     target_str = 'target'
     df = pd.DataFrame(data)[['feature1', 'feature2', 'feature3', 'feature4', 'feature5', 'feature6', 'feature7', target_str]]
-    test_metrics, best_model_tuple, fitted_models = main(df, target_str, descriptives=True, print_train_scores=False,
+    test_metrics, best_model_tuple, fitted_models = main(df, target_str, descriptives=True, verbose=2,
                                                          imputation_dict={'feature1' : 10, 'feature7': 'high'},
-                                                         impute_method="mode", test_size=0.2, validation_size=0.4)
+                                                         impute_method="mode", test_size=0.2)
