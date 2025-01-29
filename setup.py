@@ -1,9 +1,10 @@
-from distutils.core import setup
+from setuptools import setup, find_packages
 
 setup(
-    name='TonyML',
-    version='1.0',
-    packages=[''],
+    name='tony_ml',
+    version='1.0.0',
+    packages=find_packages(),
+    install_requires=[],
     url='https://github.com/anthonygfruit/AutoML',
     license='Apache 2.0',
     author='AFruit',
