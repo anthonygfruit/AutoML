@@ -258,6 +258,50 @@ def impute_missing_values_categorical_bulk(df, imputation_dict):
         df = impute_missing_values_categorical(df, col, value)
     return df
 
+# preprocessing pipeline
+def preprocess(df, target_str, imputation_dict=None, impute_method="mean"):
+    # guess data types
+    dt = guess_data_types(df)
+    df = update_data_types(df, dt)
+
+    # impute missing values
+    if imputation_dict is not None:
+        df = impute_missing_values_categorical_bulk(df, imputation_dict)
+    df = impute_missing_values(df, strategy=impute_method)
+
+    # Plot correlations
+    corplot(df, target_str)
+
+    # Dates to ordinals
+    df, converted_cols = dates_to_ordinal(df)
+
+    return df, converted_cols
+
+# preprocessing 2: encoding and scaling
+def midprocess(df, target_str, encode_method, scale_method):
+    cat_cols = get_cat_cols(df)
+
+    encoders = None
+    # encode categorical variables
+    if encode_method.lower() == 'label':
+        df, encoders = label_encode(df, cat_cols)
+    elif encode_method.lower() == 'onehot':
+        if target_str in cat_cols:
+            cat_cols.remove(target_str)
+        df, encoders = one_hot_encode(df, cat_cols)
+        df, target_encoder = label_encode(df, [target_str])
+        encoders[target_str] = target_encoder[target_str]
+
+    scaler = None
+    # scale the data
+    y = df[target_str]
+    X = df.drop(target_str, axis=1)
+    if scale_method.lower() == 'scale':
+        X, scaler = scale_data(X)
+    elif scale_method.lower() == 'normalize':
+        X, scaler = normalize_data(X)
+
+    return X, y, cat_cols, encoders, scaler
 
 # prepare time-series data
 def prepare_ts_df(df, ts_col, target_str):
@@ -677,52 +721,18 @@ def main(df, target_str, new_df=None, ts_col=None, ts_periods=365, impute_method
     # Non-time-series case
     else:
 
-        # guess data types
-        dt = guess_data_types(df)
-        df = update_data_types(df, dt)
-
-        # impute missing values
-        if imputation_dict is not None:
-            df = impute_missing_values_categorical_bulk(df, imputation_dict)
-        df = impute_missing_values(df, strategy=impute_method)
-
-        # select appropriate machine learning problem
-        problem = select_problem(df, target_str)
-        print(f"\n{problem.title()}\n")
-
-        # Plot correlations
-        corplot(df, target_str)
-
-        df, converted_cols = dates_to_ordinal(df)
+        # Preprocess
+        df, converted_cols = preprocess(df, target_str, imputation_dict=None, impute_method=impute_method)
 
         # Select appropriate machine learning problem
         problem = select_problem(df, target_str)
+        print(f"\n{problem.title()}\n")
 
         # Get machine learning models based on the problem type
         models = get_models(problem)
 
-        # find categorical variables
-        cat_cols = get_cat_cols(df)
-
-        encoders = None
-        # encode categorical variables
-        if encode_method.lower() == 'label':
-            df, encoders = label_encode(df, cat_cols)
-        elif encode_method.lower() == 'onehot':
-            if target_str in cat_cols:
-                cat_cols.remove(target_str)
-            df, encoders = one_hot_encode(df, cat_cols)
-            df, target_encoder = label_encode(df, [target_str])
-            encoders[target_str] = target_encoder[target_str]
-
-        scaler = None
-        # scale the data
-        y = df[target_str]
-        X = df.drop(target_str, axis=1)
-        if scale_method.lower() == 'scale':
-            X, scaler = scale_data(X)
-        elif scale_method.lower() == 'normalize':
-            X, scaler = normalize_data(X)
+        # Midprocess
+        X, y, cat_cols, encoders, scaler = midprocess(df, target_str, encode_method, scale_method)
 
         # Split the data into train and test sets
         X_train, X_test, y_train, y_test = split_data(X, y, test_size=test_size)
