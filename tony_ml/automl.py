@@ -6,6 +6,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from dateutil.parser import parse
 from prophet import Prophet
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier, GradientBoostingRegressor, \
     GradientBoostingClassifier
@@ -14,7 +15,8 @@ from sklearn.metrics import accuracy_score, f1_score, mean_squared_error, mean_a
     precision_score, recall_score
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.neural_network import MLPClassifier, MLPRegressor
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler, MinMaxScaler
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 
@@ -80,6 +82,53 @@ def update_data_types(df, data_types):
 def get_cat_cols(df):
     return [col for col in df.columns if
             df[col].dtype == "string" or np.issubdtype(df[col].dtype, np.datetime64) or df[col].dtype == "object"]
+
+# fuzzy date match
+def is_date(df, fuzzy=False):
+    date_cols = []
+    for col in df.columns:
+        # Check if any value in the column is a valid date
+        def is_parsable_date(val):
+            try:
+                # Try to parse the value as a date
+                if isinstance(val, str):
+                    parse(val, fuzzy=fuzzy)
+                    return True
+                elif pd.notna(val) and isinstance(val, datetime):
+                    return True
+                return False
+            except:
+                return False
+
+        if df[col].apply(is_parsable_date).any():
+            date_cols.append(col)
+
+    return date_cols
+
+
+# dates to ordinal
+def dates_to_ordinal(df):
+    converted_cols = []
+    date_cols = is_date(df)
+    for col in date_cols:
+        try:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+            if df[col].notna().any():
+                df[col] = df[col].map(lambda x: x.toordinal() if pd.notna(x) else 0).astype(int)
+                converted_cols.append(col)
+        except:
+            pass
+    return df, converted_cols
+
+
+# ordinal to dates
+def ordinal_to_dates(df, converted_cols):
+    for col in converted_cols:
+        try:
+            df[col] = pd.to_datetime(df[col].astype(int).map(lambda x: datetime.fromordinal(x) if x > 0 else None), errors='coerce')
+        except:
+            pass
+    return df
 
 
 # label encode categorical variables and keep the encoder for later
@@ -301,7 +350,7 @@ def get_models(problem):
 
 
 # TRAINING
-# tune time-series models
+# tune arima
 def tune_arima(df, target_str, season_periods=12, test_periods=365, verbose=0):
     # Define the p, d, and q parameters to take any value between 0 and 2
     p = d = q = range(0, 3)
@@ -352,6 +401,7 @@ def tune_arima(df, target_str, season_periods=12, test_periods=365, verbose=0):
     return ("ARIMA", best_params)
 
 
+#tune prophet
 def tune_prophet(df, target_str, test_periods=365, verbose=0):
     # Define a list of parameter grids to search over
     param_grid = {
@@ -442,7 +492,8 @@ def tune_params(models, problem, X_train, y_train, verbose=0, custom_param_grids
 
     # Merge custom grids with default grids (if provided)
     if custom_param_grids:
-        param_grids.update(custom_param_grids)
+        for model_name, custom_grid in custom_param_grids.items():
+            param_grids[model_name] = custom_grid
 
     tuned_models = {}
 
@@ -542,37 +593,26 @@ def predict_unseen(df, target_str, model, encoders, scaler, impute_method, imput
         df = impute_missing_values_categorical_bulk(df, imputation_dict)
     df = impute_missing_values(df, strategy=impute_method)
 
+    # Convert dates to ordinals
+    df, _ = dates_to_ordinal(df)
+
     # Encode the data using encoders
     for col, encoder in encoders.items():
-        if col in df.columns and isinstance(encoder, LabelEncoder):
-            # Replace unseen categories with 'unknown' if it exists in the fitted encoder
-            df[col] = df[col].apply(lambda x: x if x in encoder.classes_ else 'unknown')
-            # Transform using LabelEncoder
-            df[col] = encoder.transform(df[col])
-        elif col in df.columns and isinstance(encoder, OneHotEncoder):
-            # Validate column ensures it matches the encoder's expected categories
-            df[col] = df[col].fillna("unknown")  # Replace NaNs with a filler category
-            if df[col].dtype != object:  # Convert non-strings into strings for OneHotEncoder compatibility
-                df[col] = df[col].astype(str)
-
-            # Check for unseen categories
-            known_categories = set(encoder.categories_[0])
-            unseen_categories = set(df[col]) - known_categories
-            if unseen_categories:
-                print(f"Warning: Unseen categories found in column '{col}': {unseen_categories}")
-                # Map unseen categories to 'unknown' if it exists in the fitted encoder
-                if "unknown" in known_categories:
-                    df[col] = df[col].apply(lambda x: x if x in known_categories else "unknown")
-                else:
-                    raise ValueError(f"Unseen categories in '{col}' with no 'unknown' placeholder.")
-
-            # Transform using OneHotEncoder
-            ohe_encoded = encoder.transform(df[[col]]).toarray()
-            ohe_columns = [f"{col}_{i}" for i in range(len(encoder.categories_[0]))]
-            ohe_df = pd.DataFrame(ohe_encoded, columns=ohe_columns, index=df.index)
-
-            # Concatenate the encoded columns into the DataFrame
-            df = pd.concat([df.drop(columns=[col]), ohe_df], axis=1)
+        if col in df.columns:
+            if isinstance(encoder, LabelEncoder):
+                df[col] = df[col].apply(lambda x: x if x in encoder.classes_ else 'unknown')
+                if 'unknown' not in encoder.classes_:
+                    # Convert to object dtype to handle mixed types
+                    encoder.classes_ = np.append(encoder.classes_.astype(object), 'unknown')
+                df[col] = encoder.transform(df[col])
+            elif isinstance(encoder, OneHotEncoder):
+                df[col] = df[col].fillna("unknown").astype(str)
+                known_categories = set(encoder.categories_[0])
+                df[col] = df[col].apply(lambda x: x if x in known_categories else "unknown")
+                ohe_encoded = encoder.transform(df[[col]]).toarray()
+                ohe_columns = [f"{col}_{i}" for i in range(len(encoder.categories_[0]))]
+                ohe_df = pd.DataFrame(ohe_encoded, columns=ohe_columns, index=df.index)
+                df = pd.concat([df.drop(columns=[col]), ohe_df], axis=1)
 
     # Scale the data using the provided scaler
     X_new = scaler.transform(df)
@@ -586,9 +626,11 @@ def predict_unseen(df, target_str, model, encoders, scaler, impute_method, imput
         df = un_encode(df, encoders)
     except Exception as e:
         print(f"Error during un-encoding: {e}")
+
     return df
 
 
+# make predictions on new time series data
 def predict_ts(df, best_params, f_periods=365):
     model_name = best_params[0]
     params = best_params[1]
@@ -611,7 +653,7 @@ def predict_ts(df, best_params, f_periods=365):
 
 
 # PIPELINE
-def main(df, new_df, target_str, ts_col=None, ts_periods=365, impute_method="mean", imputation_dict=None,
+def main(df, target_str, new_df=None, ts_col=None, ts_periods=365, impute_method="mean", imputation_dict=None,
          encode_method='label', scale_method='scale', test_size=0.2, custom_param_grids=None, cv_folds=4, verbose=0):
     # Get descriptive statistics
     print(get_descriptives(df).to_string())
@@ -627,7 +669,7 @@ def main(df, new_df, target_str, ts_col=None, ts_periods=365, impute_method="mea
         sarima_predictions = predict_ts(df, best_sarima, n_periods=int(ts_periods))
         prophet_predictions = predict_ts(df, best_prophet, n_periods=int(ts_periods))
 
-        return sarima_predictions, prophet_predictions
+        return (sarima_predictions, prophet_predictions)
 
     # Non-time-series case
     else:
@@ -643,10 +685,12 @@ def main(df, new_df, target_str, ts_col=None, ts_periods=365, impute_method="mea
 
         # select appropriate machine learning problem
         problem = select_problem(df, target_str)
-        print(problem.title(), '\n')
+        print(f"\n{problem.title()}\n")
 
         # Plot correlations
         corplot(df, target_str)
+
+        df, converted_cols = dates_to_ordinal(df)
 
         # Select appropriate machine learning problem
         problem = select_problem(df, target_str)
@@ -688,13 +732,19 @@ def main(df, new_df, target_str, ts_col=None, ts_periods=365, impute_method="mea
         best_model_name, best_model = evaluate(tuned_models, problem, X_test, y_test)
 
         # Make predictions on new_df
-        preds = predict_unseen(new_df, target_str, best_model, encoders, scaler, impute_method, imputation_dict)
+        if new_df is not None:
+            preds = predict_unseen(new_df, target_str, best_model, encoders, scaler, impute_method, imputation_dict)
 
-        return preds
+            # Convert ordinals back to dates
+            preds = ordinal_to_dates(preds, converted_cols)
 
+            return (preds, best_model_name, best_model)
+        else:
+            return (best_model_name, best_model, encoders, scaler, converted_cols, cat_cols)
 
-def example_str():
-    return ('''if __name__ == "__main__":
+# examples of how to use the thang
+def example_dict():
+    return {"Non Time Series Usage": '''if __name__ == "__main__":
 
         df = pd.DataFrame({
             "date": pd.date_range(start="2020-01-01", periods=1000, freq="D"),
@@ -713,8 +763,9 @@ def example_str():
 
 
         # Run main function
-        preds = main(df, new_df,
+        info = main(df,
                      target_str="target_column",
+                     new_df=new_df,
                      ts_col=None,
                      ts_periods=365,
                      impute_method="mean",
@@ -727,9 +778,7 @@ def example_str():
                      verbose=0)
 
         # Display predictions
-        print(preds)''',
-
-            '''# Example usage for time series
+        print(info[0].head().to_string())''', "Time Series Usage": '''# Example usage for time series
             if __name__ == "__main__":
                 # Create sample training data for time series with nan and none values
                 date_rng = pd.date_range(start='2022-01-01', end='2024-12-31', freq='D')
@@ -749,8 +798,9 @@ def example_str():
                 })
         
                 # Run main function
-                preds = main(df, new_df,
+                info = main(df,
                              target_str="target_column",
+                             new_df=new_df
                              ts_col="date",
                              ts_periods=365,
                              impute_method="mean",
@@ -763,4 +813,37 @@ def example_str():
                              verbose=2)
         
                 # Display predictions
-                print(preds)''')
+                print(info[0].head().to_string())''', "Custom Param Grid": ''' param_grids = {
+        "Linear Regression": {
+            "fit_intercept": [True, False],
+            "normalize": [True, False]
+        },
+        "Random Forest": {
+            "n_estimators": [10, 50, 100],
+            "max_depth": [None, 5, 10],
+            "min_samples_split": [2, 5, 10],
+            "min_samples_leaf": [3, 5, 10],
+            "max_features": ["sqrt", "log2", None],
+            "bootstrap": [True, False]
+        },
+        "Gradient Boosting": {
+            "n_estimators": [10, 50, 100, 200],
+            "learning_rate": [0.01, 0.1, 0.5],
+            "max_depth": [3, 5, 10],
+            "min_samples_split": [2, 5, 10],
+            "min_samples_leaf": [3, 5, 10],
+        },
+        "Neural Network": {
+            "hidden_layer_sizes": [(50,), (100,), (50, 50), (100, 50)],
+            "activation": ["relu", "tanh", "logistic"],
+            "solver": ["adam", "sgd", "lbfgs"],
+            "alpha": [0.0001, 0.001, 0.01],
+            "learning_rate": ["constant", "invscaling", "adaptive"]
+        },
+        "Logistic Regression": {
+            "penalty": ["l2"],
+            "C": [0.1, 1, 10, 100],
+            "solver": ["liblinear", "saga", "lbfgs"],
+            "max_iter": [100, 200, 500]
+        }
+    }'''}
