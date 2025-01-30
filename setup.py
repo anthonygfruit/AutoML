@@ -2,8 +2,8 @@ from setuptools import setup, find_packages
 
 setup(
     name='tony_ml',
-    version='1.0.1',
-    packages=find_packages(),
+    version='1.0.3',
+    packages=find_packages(exclude=['main']),
     install_requires=[],
     url='https://github.com/anthonygfruit/AutoML',
     license='Apache 2.0',

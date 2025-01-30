@@ -508,7 +508,7 @@ def tune_params(models, problem, X_train, y_train, verbose=0, custom_param_grids
                     param_grid,
                     verbose=verbose,
                     cv=cv_folds,
-                    scoring="r2" if problem == "regression" else "accuracy"
+                    scoring="r2" if problem.lower() == "regression" else "accuracy"
                 )
                 grid_search.fit(X_train, y_train)
                 tuned_models[name] = grid_search.best_estimator_
@@ -669,7 +669,10 @@ def main(df, target_str, new_df=None, ts_col=None, ts_periods=365, impute_method
         sarima_predictions = predict_ts(df, best_sarima, n_periods=int(ts_periods))
         prophet_predictions = predict_ts(df, best_prophet, n_periods=int(ts_periods))
 
-        return (sarima_predictions, prophet_predictions)
+        sarima_predictions.rename(columns={f"{target_str}": f"{target_str}_pred"}, inplace=True)
+        prophet_predictions.rename(columns={f"{target_str}": f"{target_str}_pred"}, inplace=True)
+
+        return (sarima_predictions, prophet_predictions, best_sarima[1], best_prophet[1])
 
     # Non-time-series case
     else:
@@ -737,6 +740,7 @@ def main(df, target_str, new_df=None, ts_col=None, ts_periods=365, impute_method
 
             # Convert ordinals back to dates
             preds = ordinal_to_dates(preds, converted_cols)
+            preds.rename(columns={f"{target_str}": f"{target_str}_pred"}, inplace=True)
 
             return (preds, best_model_name, best_model)
         else:
