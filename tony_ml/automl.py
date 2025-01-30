@@ -508,7 +508,7 @@ def tune_params(models, problem, X_train, y_train, verbose=0, custom_param_grids
                     param_grid,
                     verbose=verbose,
                     cv=cv_folds,
-                    scoring="r2" if problem.lower() == "regression" else "accuracy"
+                    scoring="neg_mean_squared_error" if problem.lower() == "regression" else "accuracy"
                 )
                 grid_search.fit(X_train, y_train)
                 tuned_models[name] = grid_search.best_estimator_
